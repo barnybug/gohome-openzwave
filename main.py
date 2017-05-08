@@ -9,6 +9,7 @@ import logging
 import os
 import sys
 import time
+import yaml
 
 import openzwave
 from openzwave.controller import ZWaveController
@@ -36,8 +37,10 @@ for arg in sys.argv:
         print("  --log=Info|Debug")
 
 # Define some manager options
+import python_openzwave
+config_path = os.path.join(os.path.dirname(python_openzwave.__file__), 'ozw_config')
 options = ZWaveOption(device, \
-  config_path="/home/barnaby/virtualenvs/openzwave/lib/python3.6/site-packages/python_openzwave/ozw_config", \
+  config_path=config_path, \
   user_path=".", cmd_line="")
 options.set_log_file("OZW_Log.log")
 options.set_append_log_file(False)
@@ -69,6 +72,10 @@ UNLOCKED_ALARM_TYPES = set([19, 22, 25])
 LOCKED_ALARM_TYPES = set([18, 21, 24, 27])
 
 class Main(object):
+    config = None
+    device_to_node = {}
+    node_to_device = {}
+
     def network_started(self, network):
         logger.info("network started: homeid {:08x} - {} nodes were found.".format(network.home_id, network.nodes_count))
 
@@ -78,7 +85,6 @@ class Main(object):
     def network_ready(self, network):
         logger.info("network ready: %d nodes were found", network.nodes_count)
         logger.info("network ready: controller is %s", network.controller)
-        self.lock_info()
 
         # connect to updates after initialization has finished
         dispatcher.connect(self.node_update, ZWaveNetwork.SIGNAL_NODE)
@@ -90,33 +96,49 @@ class Main(object):
 
     def value_update(self, network, node, value):
         # logger.info("value update: %s", value)
+        device = self.node_to_device.get(node.node_id)
+        if not device:
+            return
+
         if value.label == 'Alarm Type':
             logger.info("Alarm: %s", LOCK_ALARM_TYPE.get(value.data))
 
             if value.data in UNLOCKED_ALARM_TYPES:
-                self.pub_lock_state(True)
+                self.pub_device_state(device, True)
             elif value.data in LOCKED_ALARM_TYPES:
-                self.pub_lock_state(False)
+                self.pub_device_state(device, False)
+        elif value.label == 'Switch':
+            logger.info("Switch: %s", value.data)
+            self.pub_device_state(device, value.data)
 
-    def pub_lock_state(self, unlocked):
+    def pub_device_state(self, device, on):
         timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')
         message = {
             'topic': 'openzwave',
             'timestamp': timestamp,
-            'device': 'lock.front',
-            'command': 'on' if unlocked else 'off',
+            'device': device,
+            'command': 'on' if on else 'off',
         }
         message = json.dumps(message)
         self.client.publish('gohome/openzwave', message)
 
-    def set_lock_state(self, unlocked):
-        node = self.lock_node()
+    def set_device_state(self, node_id, on):
+        node = self.network.nodes.get(node_id)
         if not node:
-            logger.warn('No lock')
+            logger.warn('No node %d found', node_id)
             return
         by_label = {val.label: val for val in node.values.values()}
-        by_label['Locked'].data = not unlocked
-        logger.info("Locked set to %s", not unlocked)
+
+        if 'COMMAND_CLASS_DOOR_LOCK' in node.command_classes_as_string:
+            logger.info('Unlocking...' if on else 'Locking...')
+            by_label['Locked'].data = not on
+            logger.info("Locked set to %s", not on)
+        elif 'COMMAND_CLASS_SWITCH_BINARY' in node.command_classes_as_string:
+            logger.info('Switching on...' if on else 'Switching off...')
+            by_label['Switch'].data = on
+            logger.info("Switch set to %s", on)
+        else:
+            logger.info("Node %d not in recognised classes", node_id)
 
     def ctrl_message(self, state, message, network, controller):
         logger.info('controller message: %s', message)
@@ -126,30 +148,30 @@ class Main(object):
             return filter(lambda n: name in n.command_classes_as_string, self.network.nodes.values())
         return next(nodes_matching_class('COMMAND_CLASS_DOOR_LOCK'), None)
 
-    def lock_info(self):
-        node = self.lock_node()
-        if not node:
-            logger.warn('No lock')
-            return
-        by_label = {val.label: val for val in node.values.values()}
-
-        self.pub_lock_state(not by_label['Locked'])
-
-        for i in ('Locked', 'Locked (Advanced)', 'Log Record', 'Current Record Number'):
-            if i in by_label:
-                val = by_label[i]
-                logger.info('%s: %s' % (i, val.data))
-
     def on_mqtt_connect(self, client, userdata, flags, rc):
         logger.info('Connected to MQTT')
-        client.subscribe('gohome/command/lock.front')
+        client.subscribe('gohome/command/#')
+        client.subscribe('gohome/config')
 
     def on_mqtt_message(self, client, userdata, msg):
-        logger.info('MQTT received: %s', msg.payload)
         message = json.loads(msg.payload)
-        unlock = message['command'] == 'on'
-        logger.info('Unlocking...' if unlock else 'Locking...')
-        self.set_lock_state(unlock)
+        topic = message['topic']
+        if topic == 'config':
+            self.config = yaml.load(message['config'])
+            self.node_to_device = self.config['protocols']['zwave']
+            self.device_to_node = {
+                device: node_id
+                for node_id, device in self.node_to_device.items()
+            }
+
+        elif topic == 'command':
+            if message['device'] not in self.device_to_node:
+                return
+
+            logger.info('Command received: %s', msg.payload)
+            node_id = self.device_to_node[message['device']]
+            on = message['command'] == 'on'
+            self.set_device_state(node_id, on)
 
     def run(self):
         # Connect to mqtt
@@ -168,37 +190,6 @@ class Main(object):
 
         self.network.start()
 
-        # wait for the network.
-        # logger.info("***** Waiting for network to become ready:")
-        # while network.state < network.STATE_READY:
-        #     sys.stdout.write(".")
-        #     sys.stdout.flush()
-        #     time.sleep(1.0)
-
-        # # connect to updates after initialization has finished
-        # dispatcher.connect(node_update, ZWaveNetwork.SIGNAL_NODE)
-        # dispatcher.connect(value_update, ZWaveNetwork.SIGNAL_VALUE)
-        # dispatcher.connect(ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
-
-        # def nodes_matching_class(name):
-        #     return filter(lambda n: name in n.command_classes_as_string, network.nodes.values())
-
-        # lock_node = next(nodes_matching_class('COMMAND_CLASS_DOOR_LOCK'), None)
-        # by_label = {val.label: val for val in lock_node.values.values()}
-
-        # time.sleep(10)
-
-        # logger.info('Unlocking...')
-        # by_label['Locked'].data = False
-
-        # time.sleep(30)
-
-        # logger.info('Locking...')
-        # by_label['Locked'].data = True
-
-        # time.sleep(60)
-
-        # network.stop()
         client.loop_forever()
 
 if __name__ == '__main__':
