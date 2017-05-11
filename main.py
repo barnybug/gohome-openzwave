@@ -112,7 +112,7 @@ class Main(object):
             self.pub_device_state(device, value.data)
 
     def pub_device_state(self, device, on):
-        timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')
+        timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         message = {
             'topic': 'openzwave',
             'timestamp': timestamp,
