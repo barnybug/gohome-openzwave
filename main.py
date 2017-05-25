@@ -68,8 +68,31 @@ LOCK_ALARM_TYPE = {
     169: 'Battery too low to operate'
 }
 
-UNLOCKED_ALARM_TYPES = set([19, 22, 25])
-LOCKED_ALARM_TYPES = set([18, 21, 24, 27])
+# True = unlocked, False = locked
+LOCK_ALARM_STATE = {
+    18: False,
+    19: True,
+    21: False,
+    22: True,
+    24: False,
+    25: True,
+    27: False,
+}
+
+ACCESS_CONTROL = {
+    22: 'Open',
+    23: 'Closed',
+}
+
+ACCESS_CONTROL_STATE = {
+    22: True,
+    23: False,
+}
+
+BURGLAR = {
+    3: 'Removed from wall',
+    8: 'Motion',
+}
 
 class Main(object):
     config = None
@@ -79,6 +102,11 @@ class Main(object):
     def network_started(self, network):
         logger.info("network started: homeid {:08x} - {} nodes were found.".format(network.home_id, network.nodes_count))
 
+        # connect to updates after initialization has finished
+        dispatcher.connect(self.node_update, ZWaveNetwork.SIGNAL_NODE)
+        dispatcher.connect(self.value_update, ZWaveNetwork.SIGNAL_VALUE)
+        dispatcher.connect(self.ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
+
     def network_failed(self, network):
         logger.info("network failed")
 
@@ -86,41 +114,94 @@ class Main(object):
         logger.info("network ready: %d nodes were found", network.nodes_count)
         logger.info("network ready: controller is %s", network.controller)
 
-        # connect to updates after initialization has finished
-        dispatcher.connect(self.node_update, ZWaveNetwork.SIGNAL_NODE)
-        dispatcher.connect(self.value_update, ZWaveNetwork.SIGNAL_VALUE)
-        dispatcher.connect(self.ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
-
     def node_update(self, network, node):
         logger.info("node update: %s", node)
 
     def value_update(self, network, node, value):
-        # logger.info("value update: %s", value)
+        logger.info("value update: %s", value)
         device = self.node_to_device.get(node.node_id)
         if not device:
             return
 
-        if value.label == 'Alarm Type':
-            logger.info("Alarm: %s", LOCK_ALARM_TYPE.get(value.data))
+        fn = getattr(self, 'value_%s' % value.label.replace(' ', '_'), None)
+        if fn:
+            fn(node, device, value)
 
-            if value.data in UNLOCKED_ALARM_TYPES:
-                self.pub_device_state(device, True)
-            elif value.data in LOCKED_ALARM_TYPES:
-                self.pub_device_state(device, False)
-        elif value.label == 'Switch':
-            logger.info("Switch: %s", value.data)
-            self.pub_device_state(device, value.data)
+    def value_Alarm_Type(self, node, device, value):
+        if 'COMMAND_CLASS_DOOR_LOCK' in node.command_classes_as_string:
+            logger.info("Lock update: %s", LOCK_ALARM_TYPE.get(value.data))
+            state = LOCK_ALARM_STATE.get(value.data)
+            if state is not None:
+                self.pub_device_state(device, state)
+
+    def value_Switch(self, node, device, value):
+        logger.info("%s switch update: %s", device, value.data)
+        self.pub_device_state(device, value.data)
+
+    def value_Access_Control(self, node, device, value):
+        state = ACCESS_CONTROL_STATE.get(value.data)
+        if state is not None:
+            logger.info("%s sensor update: %s", device, state)
+            self.pub_device_state(device, state)
+        else:
+            logger.warn("Sensor update unknown: %s", value.data)
+
+    def value_Temperature(self, node, device, value):
+        if value.units == 'F':
+            celsius = (value.data - 32) * 5/9
+        else:
+            celsius = value.data
+        logger.info('Temperature: %.1fC', celsius)
+        device = 'temp.' + device.split('.')[-1]
+        message = {
+            'topic': 'temp',
+            'device': device,
+            'temp': celsius,
+        }
+        self.publish(message)
+
+    def value_Luminance(self, node, device, value):
+        # label: [Luminance] data: [16.0]
+        device = 'lux.' + device.split('.')[-1]
+        message = {
+            'topic': 'lux',
+            'device': device,
+            'lux': value.data,
+        }
+        self.publish(message)
+    
+    def value_Battery_Level(self, node, device, value):
+        # label: [Battery Level] data: [100]
+        pass
+
+    def value_Burglar(self, node, device, value):
+        state = BURGLAR.get(value.data)
+        if state is not None:
+            logger.info("Burglar update: %s", state)
+            if state == 'Motion':
+                device = 'pir.' + device.split('.')[-1]
+                message = {
+                    'topic': 'pir',
+                    'device': device,
+                    'command': 'on',
+                }
+                self.publish(message)
+        else:
+            logger.warn("Burglar unknown: %s", value.data)
 
     def pub_device_state(self, device, on):
-        timestamp = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         message = {
             'topic': 'openzwave',
-            'timestamp': timestamp,
             'device': device,
             'command': 'on' if on else 'off',
         }
+        self.publish(message)
+
+    def publish(self, message):
+        topic = 'gohome/%s/%s' % (message['topic'], message['device'])
+        message['timestamp'] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         message = json.dumps(message)
-        self.client.publish('gohome/openzwave', message)
+        self.client.publish(topic, message)
 
     def set_device_state(self, node_id, on):
         node = self.network.nodes.get(node_id)
