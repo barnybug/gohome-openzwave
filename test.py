@@ -98,13 +98,12 @@ def network_failed(network):
 def network_ready(network):
     logger.info("network ready: %d nodes were found", network.nodes_count)
     logger.info("network ready: controller is %s", network.controller)
-    lock_info()
 
 def node_update(network, node):
     logger.info("node update: %s", node)
 
 def value_update(network, node, value):
-    # logger.info("value update: %s", value)
+    logger.info("value update: %s", value)
     if value.label == 'Alarm Type':
         logger.info("Alarm: %s", LOCK_ALARM_TYPE.get(value.data))
 
@@ -120,21 +119,11 @@ dispatcher.connect(network_ready, ZWaveNetwork.SIGNAL_NETWORK_READY)
 
 network.start()
 
-def lock_info():
-    if 5 not in network.nodes:
-        logger.info('No lock')
-        return
-    node = network.nodes[5]
-    by_label = {val.label: val for val in node.values.values()}
-
-    for i in ('Locked', 'Locked (Advanced)', 'Log Record', 'Current Record Number'):
-        if i in by_label:
-            val = by_label[i]
-            logger.info('%s: %s' % (i, val.data))
-
 # wait for the network.
 logger.info("***** Waiting for network to become ready:")
-while network.state < network.STATE_READY:
+for i in range(60):
+    if network.state == network.STATE_READY:
+        break
     sys.stdout.write(".")
     sys.stdout.flush()
     time.sleep(1.0)
@@ -147,19 +136,6 @@ dispatcher.connect(ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
 def nodes_matching_class(name):
     return filter(lambda n: name in n.command_classes_as_string, network.nodes.values())
 
-lock_node = next(nodes_matching_class('COMMAND_CLASS_DOOR_LOCK'), None)
-by_label = {val.label: val for val in lock_node.values.values()}
-
-time.sleep(10)
-
-logger.info('Unlocking...')
-by_label['Locked'].data = False
-
-time.sleep(30)
-
-logger.info('Locking...')
-by_label['Locked'].data = True
-
-time.sleep(60)
+import pdb; pdb.set_trace()
 
 network.stop()
