@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import sys
+import threading
 import time
 import yaml
 
@@ -20,7 +21,7 @@ import paho.mqtt.client as paho
 
 #logging.getLogger('openzwave').addHandler(logging.NullHandler())
 #logging.basicConfig(level=logging.DEBUG)
-logging.basicConfig(level=logging.INFO, format='%(asctime)s %(name)-10s %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(message)s')
 logger = logging.getLogger('openzwave')
 
 device = "/dev/ttyACM0"
@@ -98,21 +99,24 @@ class Main(object):
     config = None
     device_to_node = {}
     node_to_device = {}
+    timers = {}
 
     def network_started(self, network):
         logger.info("network started: homeid {:08x} - {} nodes were found.".format(network.home_id, network.nodes_count))
-
-        # connect to updates after initialization has finished
-        dispatcher.connect(self.node_update, ZWaveNetwork.SIGNAL_NODE)
-        dispatcher.connect(self.value_update, ZWaveNetwork.SIGNAL_VALUE)
-        dispatcher.connect(self.ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
+        dispatcher.connect(self.node_queries_complete, ZWaveNetwork.SIGNAL_NODE_QUERIES_COMPLETE)
 
     def network_failed(self, network):
         logger.info("network failed")
 
+    def node_queries_complete(self, network, node):
+        logger.info("node queries complete: %s", node)
+
     def network_ready(self, network):
         logger.info("network ready: %d nodes were found", network.nodes_count)
-        logger.info("network ready: controller is %s", network.controller)
+        # connect to updates after initialization has finished
+        dispatcher.connect(self.value_update, ZWaveNetwork.SIGNAL_VALUE)
+        dispatcher.connect(self.node_update, ZWaveNetwork.SIGNAL_NODE)
+        dispatcher.connect(self.ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
 
     def node_update(self, network, node):
         logger.info("node update: %s", node)
@@ -129,7 +133,8 @@ class Main(object):
 
     def value_Alarm_Type(self, node, device, value):
         if 'COMMAND_CLASS_DOOR_LOCK' in node.command_classes_as_string:
-            logger.info("Lock update: %s", LOCK_ALARM_TYPE.get(value.data))
+            if value.data in LOCK_ALARM_TYPE:
+                logger.info("Lock update: %s", LOCK_ALARM_TYPE.get(value.data))
             state = LOCK_ALARM_STATE.get(value.data)
             if state is not None:
                 self.pub_device_state(device, state)
@@ -172,22 +177,42 @@ class Main(object):
     
     def value_Battery_Level(self, node, device, value):
         # label: [Battery Level] data: [100]
-        pass
+        message = {
+            'topic': 'openzwave',
+            'device': device,
+            'battery': value.data,
+        }
+        self.publish(message)
 
     def value_Burglar(self, node, device, value):
         state = BURGLAR.get(value.data)
-        if state is not None:
-            logger.info("Burglar update: %s", state)
-            if state == 'Motion':
-                device = 'pir.' + device.split('.')[-1]
+        if state is None:
+            logger.warn("Burglar unknown: %s", value.data)
+            return
+            
+        logger.info("%s motion update: %s", device, state)
+        if state == 'Motion':
+            device = 'pir.' + device.split('.')[-1]
+            message = {
+                'topic': 'pir',
+                'device': device,
+                'command': 'on',
+            }
+            self.publish(message)
+
+            # sensors do not send off, so trigger this on a timer delay
+            if device in self.timers:
+                self.timers[device].cancel()
+            def switch_off():
+		logger.info("%s motion auto off", device)
                 message = {
                     'topic': 'pir',
                     'device': device,
-                    'command': 'on',
+                    'command': 'off',
                 }
                 self.publish(message)
-        else:
-            logger.warn("Burglar unknown: %s", value.data)
+            timer = self.timers[device] = threading.Timer(60.0, switch_off)
+            timer.start()
 
     def pub_device_state(self, device, on):
         message = {
@@ -267,7 +292,7 @@ class Main(object):
 
         dispatcher.connect(self.network_started, ZWaveNetwork.SIGNAL_NETWORK_STARTED)
         dispatcher.connect(self.network_failed, ZWaveNetwork.SIGNAL_NETWORK_FAILED)
-        dispatcher.connect(self.network_ready, ZWaveNetwork.SIGNAL_NETWORK_READY)
+        dispatcher.connect(self.network_ready, ZWaveNetwork.SIGNAL_AWAKE_NODES_QUERIED)
 
         self.network.start()
 
