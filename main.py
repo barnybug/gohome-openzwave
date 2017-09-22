@@ -11,23 +11,22 @@ import os
 import signal
 import sys
 import threading
-import time
 import yaml
 
-import openzwave
 from openzwave.controller import ZWaveController
 from openzwave.network import ZWaveNetwork
 from openzwave.option import ZWaveOption
 from pydispatch import dispatcher
+import python_openzwave
 import paho.mqtt.client as paho
 
-#logging.getLogger('openzwave').addHandler(logging.NullHandler())
-#logging.basicConfig(level=logging.DEBUG)
+# logging.getLogger('openzwave').addHandler(logging.NullHandler())
+# logging.basicConfig(level=logging.DEBUG)
 logging.basicConfig(level=logging.INFO, format='[%(name)19s] %(message)s')
 default_logger = logging.getLogger('main')
 
-device = "/dev/ttyACM0"
-log = "None"
+device = '/dev/ttyACM0'
+log = 'None'
 
 for arg in sys.argv:
     if arg.startswith("--device"):
@@ -40,11 +39,8 @@ for arg in sys.argv:
         print("  --log=Info|Debug")
 
 # Define some manager options
-import python_openzwave
 config_path = os.path.join(os.path.dirname(python_openzwave.__file__), 'ozw_config')
-options = ZWaveOption(device, \
-  config_path=config_path, \
-  user_path=".", cmd_line="")
+options = ZWaveOption(device, config_path=config_path, user_path='.', cmd_line='')
 options.set_log_file("OZW_Log.log")
 options.set_append_log_file(False)
 options.set_console_output(False)
@@ -113,7 +109,6 @@ class Main(object):
         default_logger.info("network failed")
 
     def node_queries_complete(self, network, node):
-        device = self.node_to_device.get(node.node_id)
         logger = self.node_to_logger[node.node_id]
         logger.info("node %d queries complete: %s %s",
                     node.node_id, node.product_name, node.manufacturer_name)
@@ -130,7 +125,6 @@ class Main(object):
         dispatcher.connect(self.ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
 
     def node_update(self, network, node):
-        device = self.node_to_device.get(node.node_id)
         logger = self.node_to_logger[node.node_id]
         logger.info("node update: %s", node)
 
