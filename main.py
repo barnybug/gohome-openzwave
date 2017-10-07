@@ -67,15 +67,19 @@ LOCK_ALARM_TYPE = {
     169: 'Battery too low to operate'
 }
 
-# True = unlocked, False = locked
+# on = locked, off = unlocked
 LOCK_ALARM_STATE = {
-    18: False,
-    19: True,
-    21: False,
-    22: True,
-    24: False,
-    25: True,
-    27: False,
+    9:  'jammed',
+    18: 'off',
+    19: 'on',
+    21: 'off',
+    22: 'on',
+    24: 'off',
+    25: 'on',
+    27: 'off',
+    167: 'battery',
+    168: 'battery',
+    169: 'battery',
 }
 
 ACCESS_CONTROL = {
@@ -84,8 +88,8 @@ ACCESS_CONTROL = {
 }
 
 ACCESS_CONTROL_STATE = {
-    22: True,
-    23: False,
+    22: 'on',
+    23: 'off',
 }
 
 BURGLAR = {
@@ -142,38 +146,41 @@ class Main(object):
 
     def value_Alarm_Type(self, logger, node, device, value):
         if 'COMMAND_CLASS_DOOR_LOCK' in node.command_classes_as_string:
-            if value.data in LOCK_ALARM_TYPE:
-                logger.info("Lock update: %s", LOCK_ALARM_TYPE.get(value.data))
+            if value.data not in LOCK_ALARM_TYPE:
+                logger.warn('Lock update unknown: %s', value.data)
+                return
+            logger.info('Lock update: %s', LOCK_ALARM_TYPE[value.data])
             state = LOCK_ALARM_STATE.get(value.data)
             if state is not None:
                 self.pub_device_state(device, state)
 
     def value_Switch(self, logger, node, device, value):
-        logger.info("switch update: %s", value.data)
-        self.pub_device_state(device, value.data)
+        state = 'on' if value.data else 'off'
+        logger.info('Switch update: %s', state)
+        self.pub_device_state(device, state)
 
     def value_Sensor(self, logger, node, device, value):
         # Neo CoolCam Door/Window sensors emit both Sensor and Access Control
         # for events, but use both for reliability.
-        state = value.data
+        state = 'on' if value.data else 'off'
         logger.info('Sensor update: %s', state)
         self.pub_device_state(device, state)
 
     def value_Access_Control(self, logger, node, device, value):
         # Philio 4 in 1 Multi-Sensor only emits this for open/close.
         state = ACCESS_CONTROL_STATE.get(value.data)
-        if state is not None:
-            logger.info('Sensor update: %s', state)
-            self.pub_device_state(device, state)
-        else:
-            logger.warn("Sensor update unknown: %s", value.data)
+        if state is None:
+            logger.warn('Access control unknown: %s', value.data)
+            return
+        logger.info('Access control update: %s', state)
+        self.pub_device_state(device, state)
 
     def value_Temperature(self, logger, node, device, value):
         if value.units == 'F':
             celsius = (value.data - 32) * 5/9
         else:
             celsius = value.data
-        logger.info('Temperature: %.1fC', celsius)
+        logger.debug('Temperature: %.1fC', celsius)
         device = 'temp.' + device.split('.')[-1]
         message = {
             'topic': 'temp',
@@ -210,12 +217,7 @@ class Main(object):
         logger.info("motion update: %s", state)
         if state == 'Motion':
             device = 'pir.' + device.split('.')[-1]
-            message = {
-                'topic': 'pir',
-                'device': device,
-                'command': 'on',
-            }
-            self.publish(message)
+            self.pub_device_state(device, 'on', topic='pir')
 
             # sensors do not send off, so trigger this on a timer delay
             if device in self.timers:
@@ -223,20 +225,15 @@ class Main(object):
 
             def switch_off():
                 logger.info("%s motion auto off", device)
-                message = {
-                    'topic': 'pir',
-                    'device': device,
-                    'command': 'off',
-                }
-                self.publish(message)
+                self.pub_device_state(device, 'off', topic='pir')
             timer = self.timers[device] = threading.Timer(60.0, switch_off)
             timer.start()
 
-    def pub_device_state(self, device, on):
+    def pub_device_state(self, device, command, topic='openzwave'):
         message = {
-            'topic': 'openzwave',
+            'topic': topic,
             'device': device,
-            'command': 'on' if on else 'off',
+            'command': command,
         }
         self.publish(message)
 
