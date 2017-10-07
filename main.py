@@ -153,18 +153,20 @@ class Main(object):
         self.pub_device_state(device, value.data)
 
     def value_Sensor(self, logger, node, device, value):
-        # This seems more reliable then the corresponding Access_Control from door sensors
+        # Neo CoolCam Door/Window sensors emit both Sensor and Access Control
+        # for events, but use both for reliability.
         state = value.data
         logger.info('Sensor update: %s', state)
         self.pub_device_state(device, state)
 
-    # def value_Access_Control(self, logger, node, device, value):
-    #     state = ACCESS_CONTROL_STATE.get(value.data)
-    #     if state is not None:
-    #         logger.info('Sensor update: %s', state)
-    #         self.pub_device_state(device, state)
-    #     else:
-    #         logger.warn("Sensor update unknown: %s", value.data)
+    def value_Access_Control(self, logger, node, device, value):
+        # Philio 4 in 1 Multi-Sensor only emits this for open/close.
+        state = ACCESS_CONTROL_STATE.get(value.data)
+        if state is not None:
+            logger.info('Sensor update: %s', state)
+            self.pub_device_state(device, state)
+        else:
+            logger.warn("Sensor update unknown: %s", value.data)
 
     def value_Temperature(self, logger, node, device, value):
         if value.units == 'F':
