@@ -139,6 +139,9 @@ class Main(object):
         device = self.node_to_device.get(node.node_id)
         if not device:
             return
+        timer = self.timers.pop(device, None)
+        if timer:
+            timer.cancel()
 
         fn = getattr(self, 'value_%s' % value.label.replace(' ', '_'), None)
         if fn:
@@ -297,9 +300,15 @@ class Main(object):
                 return
 
             default_logger.info('Command received: %s', msg.payload)
-            node_id = self.device_to_node[message['device']]
+            device = message['device']
+            node_id = self.device_to_node[device]
             on = message['command'] == 'on'
             self.set_device_state(node_id, on)
+
+            def repeat():
+                self.set_device_state(node_id, on)
+            timer = self.timers[device] = threading.Timer(5.0, repeat)
+            timer.start()
 
     def run(self):
         # Connect to mqtt
