@@ -8,6 +8,7 @@ import datetime
 import json
 import logging
 import os
+import re
 import signal
 import sys
 import threading
@@ -155,19 +156,19 @@ class Main(object):
             logger.info('Lock update: %s', LOCK_ALARM_TYPE[value.data])
             state = LOCK_ALARM_STATE.get(value.data)
             if state is not None:
-                self.pub_device_state(device, state)
+                self.pub_device_state(device, state, 'lock')
 
     def value_Switch(self, logger, node, device, value):
         state = 'on' if value.data else 'off'
         logger.info('Switch update: %s', state)
-        self.pub_device_state(device, state)
+        self.pub_device_state(device, state, 'ack')
 
     def value_Sensor(self, logger, node, device, value):
         # Neo CoolCam Door/Window sensors emit both Sensor and Access Control
         # for events, but use both for reliability.
         state = 'on' if value.data else 'off'
         logger.info('Sensor update: %s', state)
-        self.pub_device_state(device, state)
+        self.pub_device_state(device, state, 'sensor')
 
     def value_Access_Control(self, logger, node, device, value):
         # Philio 4 in 1 Multi-Sensor only emits this for open/close.
@@ -176,7 +177,7 @@ class Main(object):
             logger.warn('Access control unknown: %s', value.data)
             return
         logger.info('Access control update: %s', state)
-        self.pub_device_state(device, state)
+        self.pub_device_state(device, state, 'sensor')
 
     def value_Temperature(self, logger, node, device, value):
         if value.units == 'F':
@@ -220,7 +221,7 @@ class Main(object):
         logger.info("motion update: %s", state)
         if state == 'Motion':
             device = 'pir.' + device.split('.')[-1]
-            self.pub_device_state(device, 'on', topic='pir')
+            self.pub_device_state(device, 'on', 'pir')
 
             # sensors do not send off, so trigger this on a timer delay
             if device in self.timers:
@@ -228,11 +229,11 @@ class Main(object):
 
             def switch_off():
                 logger.info("%s motion auto off", device)
-                self.pub_device_state(device, 'off', topic='pir')
+                self.pub_device_state(device, 'off', 'pir')
             timer = self.timers[device] = threading.Timer(60.0, switch_off)
             timer.start()
 
-    def pub_device_state(self, device, command, topic='openzwave'):
+    def pub_device_state(self, device, command, topic):
         message = {
             'topic': topic,
             'device': device,
@@ -310,13 +311,26 @@ class Main(object):
             timer = self.timers[device] = threading.Timer(5.0, repeat)
             timer.start()
 
+    def setup_mqtt(self):
+        self.client = paho.Client()
+        self.client.on_connect = self.on_mqtt_connect
+        self.client.on_message = self.on_mqtt_message
+        url = os.getenv('GOHOME_MQTT')
+        if not url:
+            default_logger.error("Please set GOHOME_MQTT")
+            sys.exit()
+        m = re.search(r'^tcp://([^:]+)(?::(\d+))?$', url)
+        if not m:
+            default_logger.error("Invalid value for GOHOME_MQTT: %s", url)
+            sys.exit()
+        hostname, port = m.groups()
+        port = int(port) if port else 1883
+        default_logger.info('Connecting to mqtt server: %s:%d', hostname, port)
+        self.client.connect(hostname, port=port)
+
     def run(self):
         # Connect to mqtt
-        client = paho.Client()
-        client.on_connect = self.on_mqtt_connect
-        client.on_message = self.on_mqtt_message
-        client.connect('localhost')
-        self.client = client
+        self.setup_mqtt()
 
         # Create a network object
         self.network = ZWaveNetwork(options, autostart=False)
@@ -327,7 +341,7 @@ class Main(object):
             default_logger.info("Stopping zwave network")
             self.network.stop()
             default_logger.info("Stopping mqtt client")
-            client.disconnect()
+            self.client.disconnect()
 
         signal.signal(signal.SIGINT, signal_handler)
         signal.signal(signal.SIGTERM, signal_handler)
@@ -338,7 +352,7 @@ class Main(object):
 
         self.network.start()
 
-        client.loop_forever()
+        self.client.loop_forever()
         default_logger.info("Finished")
 
 if __name__ == '__main__':
