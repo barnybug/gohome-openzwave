@@ -297,9 +297,16 @@ class Main(object):
         client.subscribe('gohome/config')
 
     def on_mqtt_message(self, client, userdata, msg):
-        topic = msg.topic.split('/')[1]
+        if msg.payload.startswith(b'---'):
+            message = yaml.safe_load(msg.payload)
+        else:
+            message = json.loads(msg.payload)
+        if 'topic' in message:
+            topic = message['topic']
+        else:
+            topic = msg.topic.split('/')[1]
         if topic == 'config':
-            self.config = yaml.safe_load(msg.payload)
+            self.config = message
             self.node_to_device = {
                 int(device['source'][6:]): _id
                 for _id, device in self.config['devices'].items()
@@ -316,7 +323,6 @@ class Main(object):
             default_logger.info('Configured devices')
 
         elif topic == 'command':
-            message = json.loads(msg.payload)
             if message['device'] not in self.device_to_node:
                 return
 
