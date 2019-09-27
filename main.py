@@ -127,17 +127,25 @@ class Main(object):
         # connect to updates after initialization has finished
         dispatcher.connect(self.value_update, ZWaveNetwork.SIGNAL_VALUE)
         dispatcher.connect(self.node_update, ZWaveNetwork.SIGNAL_NODE)
+        dispatcher.connect(self.node_event, ZWaveNetwork.SIGNAL_NODE_EVENT)
         dispatcher.connect(self.ctrl_message, ZWaveController.SIGNAL_CONTROLLER)
 
     def node_update(self, network, node):
         logger = self.node_to_logger[node.node_id]
         logger.info("node update: %s", node)
 
+    def node_event(self, network, node, value):
+        device = self.node_to_device.get(node.node_id)
+        logger = self.node_to_logger[node.node_id]
+        logger.info("node event: value: %s", value)
+        if not device:
+            return
+        self.value_basic(logger, node, device, value)
+
     def value_update(self, network, node, value):
         device = self.node_to_device.get(node.node_id)
         logger = self.node_to_logger[node.node_id]
         logger.info("value update: %s=%s", value.label, value.data_as_string)
-        device = self.node_to_device.get(node.node_id)
         if not device:
             return
         timer = self.timers.pop(device, None)
@@ -147,6 +155,12 @@ class Main(object):
         fn = getattr(self, 'value_%s' % value.label.replace(' ', '_'), None)
         if fn:
             fn(logger, node, device, value)
+
+    def value_basic(self, logger, node, device, value):
+            state = 'on' if value == 255 else 'off'
+            logger.info('Basic sensor update: %s', state)
+            if state is not None:
+                self.pub_device_state(device, state, 'sensor')
 
     def value_Alarm_Type(self, logger, node, device, value):
         if 'COMMAND_CLASS_DOOR_LOCK' in node.command_classes_as_string:
@@ -287,11 +301,16 @@ class Main(object):
         topic = message['topic']
         if topic == 'config':
             self.config = yaml.load(message['config'])
-            self.node_to_device = self.config['protocols']['zwave']
+            self.node_to_device = {
+                int(device['source'][6:]): _id
+                for _id, device in self.config['devices'].items()
+                if 'source' in device and device['source'].startswith('zwave.')
+            }
             self.device_to_node = {
                 device: node_id
                 for node_id, device in self.node_to_device.items()
             }
+            default_logger.info(str(self.node_to_device))
             self.node_to_logger = collections.defaultdict(lambda: default_logger)
             for node_id, device in self.node_to_device.items():
                 self.node_to_logger[node_id] = logging.getLogger(device)
