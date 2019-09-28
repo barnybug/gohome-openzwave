@@ -259,7 +259,7 @@ class Main(object):
         topic = 'gohome/%s/%s' % (message['topic'], message['device'])
         message['timestamp'] = datetime.datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3]
         message = json.dumps(message)
-        self.client.publish(topic, message)
+        self.client.publish(topic, message, retain=True)
 
     def set_device_state(self, node_id, on):
         node = self.network.nodes.get(node_id)
@@ -297,10 +297,10 @@ class Main(object):
         client.subscribe('gohome/config')
 
     def on_mqtt_message(self, client, userdata, msg):
-        if msg.payload.startswith(b'---'):
-            message = yaml.safe_load(msg.payload)
-        else:
+        if msg.payload.startswith(b'{'):
             message = json.loads(msg.payload)
+        else:
+            message = yaml.safe_load(msg.payload)
         if 'topic' in message:
             topic = message['topic']
         else:
