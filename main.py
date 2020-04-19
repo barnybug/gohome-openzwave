@@ -165,7 +165,7 @@ class Main(object):
     def value_Alarm_Type(self, logger, node, device, value):
         if 'COMMAND_CLASS_DOOR_LOCK' in node.command_classes_as_string:
             if value.data not in LOCK_ALARM_TYPE:
-                logger.warn('Lock update unknown: %s', value.data)
+                logger.warning('Lock update unknown: %s', value.data)
                 return
             logger.info('Lock update: %s', LOCK_ALARM_TYPE[value.data])
             state = LOCK_ALARM_STATE.get(value.data)
@@ -188,7 +188,7 @@ class Main(object):
         # Philio 4 in 1 Multi-Sensor only emits this for open/close.
         state = ACCESS_CONTROL_STATE.get(value.data)
         if state is None:
-            logger.warn('Access control unknown: %s', value.data)
+            logger.warning('Access control unknown: %s', value.data)
             return
         logger.info('Access control update: %s', state)
         self.pub_device_state(device, state, 'sensor')
@@ -229,7 +229,7 @@ class Main(object):
     def value_Burglar(self, logger, node, device, value):
         state = BURGLAR.get(value.data)
         if state is None:
-            logger.warn("Burglar unknown: %s", value.data)
+            logger.warning("Burglar unknown: %s", value.data)
             return
 
         logger.info("motion update: %s", state)
@@ -265,7 +265,7 @@ class Main(object):
         node = self.network.nodes.get(node_id)
         logger = self.node_to_logger[node_id]
         if not node:
-            logger.warn('No node %d found', node_id)
+            logger.warning('No node %d found', node_id)
             return
         by_label = {val.label: val for val in node.values.values()}
 
@@ -326,7 +326,7 @@ class Main(object):
             if message['device'] not in self.device_to_node:
                 return
 
-            default_logger.info('Command received: %s', msg.payload)
+            default_logger.info('Command received: %s', msg.payload.decode('utf-8'))
             device = message['device']
             node_id = self.device_to_node[device]
             on = message['command'] == 'on'
