@@ -9,6 +9,3 @@ verify_ssl = true
 pydispatcher = "*"
 pyyaml = "*"
 paho-mqtt = "*"
-
-[requires]
-python_version = "3.7"
