@@ -9,3 +9,4 @@ verify_ssl = true
 pydispatcher = "*"
 pyyaml = "*"
 paho-mqtt = "*"
+urwid = "*"
