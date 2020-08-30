@@ -235,7 +235,7 @@ class Main(object):
         logger.info("motion update: %s", state)
         if state == 'Motion':
             device = 'pir.' + device.split('.')[-1]
-            self.pub_device_state(device, 'on', 'pir')
+            self.pub_device_state(device, 'on', 'sensor')
 
             # sensors do not send off, so trigger this on a timer delay
             if device in self.timers:
@@ -243,7 +243,7 @@ class Main(object):
 
             def switch_off():
                 logger.info("%s motion auto off", device)
-                self.pub_device_state(device, 'off', 'pir')
+                self.pub_device_state(device, 'off', 'sensor')
             timer = self.timers[device] = threading.Timer(60.0, switch_off)
             timer.start()
 
